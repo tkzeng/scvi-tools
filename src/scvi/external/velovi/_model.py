@@ -23,6 +23,8 @@ from scvi.model.base import BaseModelClass, UnsupervisedTrainingMixin, VAEMixin
 from scvi.train import TrainingPlan, TrainRunner
 from scvi.utils._docstrings import devices_dsp, setup_anndata_dsp
 
+import wandb
+
 logger = logging.getLogger(__name__)
 
 
@@ -112,8 +114,13 @@ class VELOVI(VAEMixin, UnsupervisedTrainingMixin, BaseModelClass):
             **model_kwargs,
         )
         self._model_summary_string = (
-            f"VELOVI Model with the following params: \nn_hidden: {n_hidden}, "
-            f"n_latent: {n_latent}, n_layers: {n_layers}, dropout_rate: {dropout_rate}"
+            "VELOVI Model with the following params: \nn_hidden: {}, n_latent: {}, n_layers: {}, "
+            "dropout_rate: {}"
+        ).format(
+            n_hidden,
+            n_latent,
+            n_layers,
+            dropout_rate,
         )
         self.init_params_ = self._get_init_params(locals())
 
@@ -164,6 +171,17 @@ class VELOVI(VAEMixin, UnsupervisedTrainingMixin, BaseModelClass):
         **trainer_kwargs
             Other keyword args for :class:`~scvi.train.Trainer`.
         """
+        # start a new wandb run to track this script
+        # wandb.init(
+        #     # set the wandb project where this run will be logged
+        #     project="velovi",
+        #
+        #     # track hyperparameters and run metadata
+        #     config={
+        #         "code": "original"
+        #     }
+        # )
+
         user_plan_kwargs = plan_kwargs.copy() if isinstance(plan_kwargs, dict) else {}
         plan_kwargs = {"lr": lr, "weight_decay": weight_decay, "optimizer": "AdamW"}
         plan_kwargs.update(user_plan_kwargs)
@@ -178,6 +196,7 @@ class VELOVI(VAEMixin, UnsupervisedTrainingMixin, BaseModelClass):
             validation_size=validation_size,
             batch_size=batch_size,
         )
+        print("data_splitter",data_splitter)
         training_plan = TrainingPlan(self.module, **plan_kwargs)
 
         es = "early_stopping"
@@ -898,8 +917,14 @@ class VELOVI(VAEMixin, UnsupervisedTrainingMixin, BaseModelClass):
             "gamma": gamma.cpu().numpy(),
             "alpha": alpha.cpu().numpy(),
             "alpha_1": alpha_1.cpu().numpy(),
-            "lambda_alpha": lambda_alpha.cpu().numpy(),
+            "lambda_alpha": lambda_alpha.cpu().numpy()
         }
+
+    @torch.inference_mode()
+    def get_w_adj(self):
+        adjacency = self.module._get_w_adj()
+        return adjacency.cpu().numpy()
+
 
     @classmethod
     @setup_anndata_dsp.dedent
