@@ -73,6 +73,7 @@ class VELOVI(VAEMixin, UnsupervisedTrainingMixin, BaseModelClass):
 
         spliced = self.adata_manager.get_from_registry(VELOVI_REGISTRY_KEYS.X_KEY)
         unspliced = self.adata_manager.get_from_registry(VELOVI_REGISTRY_KEYS.U_KEY)
+        # mask = self.adata_manager.get_from_registry(VELOVI_REGISTRY_KEYS.M_KEY)
 
         sorted_unspliced = np.argsort(unspliced, axis=0)
         ind = int(adata.n_obs * 0.99)
@@ -196,7 +197,7 @@ class VELOVI(VAEMixin, UnsupervisedTrainingMixin, BaseModelClass):
             validation_size=validation_size,
             batch_size=batch_size,
         )
-        print("data_splitter",data_splitter)
+
         training_plan = TrainingPlan(self.module, **plan_kwargs)
 
         es = "early_stopping"
@@ -649,6 +650,8 @@ class VELOVI(VAEMixin, UnsupervisedTrainingMixin, BaseModelClass):
         return_mean: bool = True,
         return_numpy: bool | None = None,
         restrict_to_latent_dim: int | None = None,
+        w_adj=None,
+        basal=None
     ) -> np.ndarray | pd.DataFrame:
         r"""Returns the fitted spliced and unspliced abundance (s(t) and u(t)).
 
@@ -711,7 +714,9 @@ class VELOVI(VAEMixin, UnsupervisedTrainingMixin, BaseModelClass):
                 inference_outputs, generative_outputs = self.module.forward(
                     tensors=tensors,
                     compute_loss=False,
-                    generative_kwargs={"latent_dim": restrict_to_latent_dim},
+                    generative_kwargs={"latent_dim": restrict_to_latent_dim,
+                                       "w_adj": w_adj,
+                                       "basal": basal},
                 )
 
                 gamma = inference_outputs["gamma"]
@@ -922,9 +927,7 @@ class VELOVI(VAEMixin, UnsupervisedTrainingMixin, BaseModelClass):
 
     @torch.inference_mode()
     def get_w_adj(self):
-        adjacency = self.module._get_w_adj()
-        return adjacency.cpu().numpy()
-
+        return self.module._get_w_adj()
 
     @classmethod
     @setup_anndata_dsp.dedent
@@ -933,6 +936,7 @@ class VELOVI(VAEMixin, UnsupervisedTrainingMixin, BaseModelClass):
         adata: AnnData,
         spliced_layer: str,
         unspliced_layer: str,
+        mask_layer: str,
         **kwargs,
     ) -> AnnData | None:
         """%(summary)s.
@@ -953,6 +957,7 @@ class VELOVI(VAEMixin, UnsupervisedTrainingMixin, BaseModelClass):
         anndata_fields = [
             LayerField(VELOVI_REGISTRY_KEYS.X_KEY, spliced_layer, is_count_data=False),
             LayerField(VELOVI_REGISTRY_KEYS.U_KEY, unspliced_layer, is_count_data=False),
+            LayerField(VELOVI_REGISTRY_KEYS.M_KEY, mask_layer, is_count_data=False),
         ]
         adata_manager = AnnDataManager(fields=anndata_fields, setup_method_args=setup_method_args)
         adata_manager.register_fields(adata, **kwargs)
