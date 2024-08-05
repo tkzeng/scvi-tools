@@ -10,6 +10,11 @@ to [Semantic Versioning]. Full commit history is available in the
 
 #### Added
 
+- Add option for using external indexes in data splitting classes that are under `scvi.dataloaders`
+    by passing `external_indexing=list[train_idx,valid_idx,test_idx]` as well as in all models
+    available {pr}`2902`.
+- Add warning if creating data splits in `scvi.dataloaders` that create last batch with less than 3
+    cells {pr}`2916`.
 - Add new experimental functional API for hyperparameter tuning with
     {func}`scvi.autotune.run_autotune` and {class}`scvi.autotune.AutotuneExperiment` to replace
     {class}`scvi.autotune.ModelTuner`, {class}`scvi.autotune.TunerManager`, and
@@ -29,6 +34,7 @@ to [Semantic Versioning]. Full commit history is available in the
 - Add `unsigned` argument to {meth}`scvi.hub.HubModel.pull_from_s3` to allow for unsigned
     downloads of models from AWS S3 {pr}`2615`.
 - Add support for `batch_key` in {meth}`scvi.model.CondSCVI.setup_anndata` {pr}`2626`.
+- Add support for {meth}`scvi.model.base.RNASeqMixin` in {class}`scvi.model.CondSCVI` {pr}`2915`.
 - Add `load_best_on_end` argument to {class}`scvi.train.SaveCheckpoint` to load the best model
     state at the end of training {pr}`2672`.
 - Add experimental class {class}`scvi.distributions.BetaBinomial` implementing the Beta-Binomial
@@ -36,8 +42,17 @@ to [Semantic Versioning]. Full commit history is available in the
     {pr}`2692`.
 - Add support for custom dataloaders in {class}`scvi.model.base.VAEMixin` methods by specifying
     the `dataloader` argument {pr}`2748`.
+- Add option to use a normal distribution in the generative model of {class}`scvi.model.SCVI` by
+    passing in `gene_likelihood="normal"` {pr}`2780`.
 - Add {class}`scvi.external.MRVI` for modeling sample-level heterogeneity in single-cell RNA-seq
     data {pr}`2756`.
+- Add support for reference mapping with {class}`mudata.MuData` models to
+    {class}`scvi.model.base.ArchesMixin` {pr}`2578`.
+- Add argument `return_mean` to {meth}`scvi.model.base.VAEMixin.get_reconstruction_error`
+    and {meth}`scvi.model.base.VAEMixin.get_elbo` to allow computation
+    without averaging across cells {pr}`2362`.
+- Add support for setting `weights="importance"` in
+    {meth}`scvi.model.SCANVI.differential_expression` {pr}`2362`.
 
 #### Changed
 
@@ -74,6 +89,17 @@ to [Semantic Versioning]. Full commit history is available in the
     concatenated array of all variable names. Users may replicate the previous behavior by
     passing in `legacy_mudata_format=True` to {meth}`scvi.model.base.BaseModelClass.save`
     {pr}`2769`.
+- Changed internal activation function in {class}`scvi.nn.DecoderTOTALVI` to Softplus to
+    increase numerical stability. This is the new default for new models. Previously trained models
+    will be loaded with exponential activation function {pr}`2913`.
+
+#### Fixed
+
+- Disable adversarial classifier if training with a single batch.
+    Previously this raised a None error {pr}`2914`.
+- {meth}`~scvi.model.SCVI.get_normalized_expression` fixed for Poisson distribution and
+    Negative Binomial with latent_library_size {pr}`2915`.
+- Fix {meth}`scvi.module.VAE.marginal_ll` when `n_mc_samples_per_pass=1` {pr}`2362`.
 
 #### Removed
 
@@ -87,12 +113,24 @@ to [Semantic Versioning]. Full commit history is available in the
 
 ## Version 1.1
 
-### 1.1.3 (unreleased)
+### 1.1.5 (2024-06-30)
+
+### 1.1.4 (2024-06-30)
+
+#### Added
+
+- Add argument `return_logits` to {meth}`scvi.external.SOLO.predict` that allows returning logits
+    instead of probabilities when passing in `soft=True` to replicate the buggy behavior previous
+    to v1.1.3 {pr}`2870`.
+
+### 1.1.3 (2024-06-26)
 
 #### Fixed
 
 - Breaking change: Fix {meth}`scvi.external.SOLO.predict` to correctly return probabiities
     instead of logits when passing in `soft=True` (the default option) {pr}`2689`.
+- Breaking change: Fix {class}`scvi.dataloaders.SemiSupervisedDataSplitter` to properly sample
+    unlabeled observations without replacement {pr}`2816`.
 
 ### 1.1.2 (2024-03-01)
 
@@ -484,7 +522,6 @@ to [Semantic Versioning]. Full commit history is available in the
     parameters are. We provide utility functions and methods to dynamically convert a model to
     latent mode.
 - Added {class}`~scvi.external.SCAR` as an external model for ambient RNA removal [#1683].
-- Add weight support to {class}`~scvi.model.MULTIVI` [#1697].
 
 #### Minor changes
 
@@ -500,7 +537,7 @@ to [Semantic Versioning]. Full commit history is available in the
 
 #### Breaking changes
 
-None
+- Add weight support to {class}`~scvi.model.MULTIVI` [#1697]. Old models can't be loaded anymore.
 
 #### Bug Fixes
 
