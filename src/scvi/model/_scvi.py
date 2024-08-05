@@ -5,6 +5,7 @@ import warnings
 from typing import Literal
 
 import numpy as np
+import pandas as pd
 from anndata import AnnData
 
 from scvi import REGISTRY_KEYS, settings
@@ -302,3 +303,15 @@ class SCVI(
         minified_adata.obs[_SCVI_OBSERVED_LIB_SIZE] = np.squeeze(np.asarray(counts.sum(axis=1)))
         self._update_adata_and_manager_post_minification(minified_adata, minified_data_type)
         self.module.minified_data_type = minified_data_type
+
+    def get_loadings(self) -> pd.DataFrame:
+        """Extract per-gene weights in the linear decoder.
+
+        Shape is genes by `n_latent`.
+
+        """
+        #cols = [f"Z_{i}" for i in range(self.n_latent)]
+        var_names = self.adata.var_names
+        loadings = pd.DataFrame(self.module.get_loadings(), index=var_names)#, columns=cols)
+
+        return loadings

@@ -18,6 +18,8 @@ from scvi.module.base import (
     auto_move_data,
 )
 
+from scvi.nn import LinearDecoderSCVI
+
 logger = logging.getLogger(__name__)
 
 
@@ -260,18 +262,49 @@ class VAE(EmbeddingModuleMixin, BaseMinifiedModeModuleClass):
             n_input_decoder += batch_dim
 
         _extra_decoder_kwargs = extra_decoder_kwargs or {}
-        self.decoder = DecoderSCVI(
+        #self.decoder = DecoderSCVI(
+        #    n_input_decoder,
+        #    n_input,
+        #    n_cat_list=cat_list,
+        #    n_layers=n_layers,
+        #    n_hidden=n_hidden,
+        #    inject_covariates=deeply_inject_covariates,
+        #    use_batch_norm=use_batch_norm_decoder,
+        #    use_layer_norm=use_layer_norm_decoder,
+        #    scale_activation="softplus" if use_size_factor_key else "softmax",
+        #    **_extra_decoder_kwargs,
+        #)
+        self.use_batch_norm=False
+        bias=False
+        self.decoder = LinearDecoderSCVI(
             n_input_decoder,
             n_input,
             n_cat_list=cat_list,
-            n_layers=n_layers,
-            n_hidden=n_hidden,
-            inject_covariates=deeply_inject_covariates,
-            use_batch_norm=use_batch_norm_decoder,
-            use_layer_norm=use_layer_norm_decoder,
-            scale_activation="softplus" if use_size_factor_key else "softmax",
-            **_extra_decoder_kwargs,
+            use_batch_norm=use_batch_norm,
+            use_layer_norm=False,
+            bias=bias,
         )
+
+    @torch.inference_mode()
+    def get_loadings(self) -> np.ndarray:
+        """Extract per-gene weights in the linear decoder."""
+        # This is BW, where B is diag(b) batch norm, W is weight matrix
+        #print(self.decoder.px_decoder)
+        if self.use_batch_norm is True:
+            w = self.decoder.factor_regressor.fc_layers[0][0].weight
+            bn = self.decoder.factor_regressor.fc_layers[0][1]
+            sigma = torch.sqrt(bn.running_var + bn.eps)
+            gamma = bn.weight
+            b = gamma / sigma
+            b_identity = torch.diag(b)
+            loadings = torch.matmul(b_identity, w)
+        else:
+            loadings = self.decoder.factor_regressor.fc_layers[0][0].weight
+        loadings = loadings.detach().cpu().numpy()
+        if self.n_batch > 1:
+            loadings = loadings[:, : -self.n_batch]
+
+        return loadings
 
     def _get_inference_input(
         self,
@@ -443,14 +476,10 @@ class VAE(EmbeddingModuleMixin, BaseMinifiedModeModuleClass):
         transform_batch: torch.Tensor | None = None,
     ) -> dict[str, Distribution | None]:
         """Run the generative process."""
+        from torch.distributions import Normal
         from torch.nn.functional import linear
 
-        from scvi.distributions import (
-            NegativeBinomial,
-            Normal,
-            Poisson,
-            ZeroInflatedNegativeBinomial,
-        )
+        from scvi.distributions import NegativeBinomial, Poisson, ZeroInflatedNegativeBinomial
 
         # TODO: refactor forward function to not rely on y
         # Likelihood distribution
@@ -515,9 +544,9 @@ class VAE(EmbeddingModuleMixin, BaseMinifiedModeModuleClass):
         elif self.gene_likelihood == "nb":
             px = NegativeBinomial(mu=px_rate, theta=px_r, scale=px_scale)
         elif self.gene_likelihood == "poisson":
-            px = Poisson(rate=px_rate, scale=px_scale)
+            px = Poisson(px_rate, scale=px_scale)
         elif self.gene_likelihood == "normal":
-            px = Normal(px_rate, px_r, normal_mu=px_scale)
+            px = Normal(px_rate, px_r)
 
         # Priors
         if self.use_observed_lib_size:
@@ -555,7 +584,7 @@ class VAE(EmbeddingModuleMixin, BaseMinifiedModeModuleClass):
                 inference_outputs[MODULE_KEYS.QL_KEY], generative_outputs[MODULE_KEYS.PL_KEY]
             ).sum(dim=1)
         else:
-            kl_divergence_l = torch.zeros_like(kl_divergence_z)
+            kl_divergence_l = torch.tensor(0.0, device=x.device)
 
         reconst_loss = -generative_outputs[MODULE_KEYS.PX_KEY].log_prob(x).sum(-1)
 
@@ -697,8 +726,6 @@ class VAE(EmbeddingModuleMixin, BaseMinifiedModeModuleClass):
                 q_l_x = ql.log_prob(library).sum(dim=-1)
 
                 log_prob_sum += p_l - q_l_x
-            if n_mc_samples_per_pass == 1:
-                log_prob_sum = log_prob_sum.unsqueeze(0)
 
             to_sum.append(log_prob_sum)
         to_sum = torch.cat(to_sum, dim=0)

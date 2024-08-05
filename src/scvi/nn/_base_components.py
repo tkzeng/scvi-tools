@@ -7,8 +7,6 @@ from torch import nn
 from torch.distributions import Normal
 from torch.nn import ModuleList
 
-from scvi.nn._utils import ExpActivation
-
 
 def _identity(x):
     return x
@@ -421,6 +419,64 @@ class LinearDecoderSCVI(nn.Module):
         use_batch_norm: bool = False,
         use_layer_norm: bool = False,
         bias: bool = False,
+        inject_covariates: bool = True,
+        **kwargs,
+    ):
+        super().__init__()
+
+        # mean gamma
+        self.factor_regressor = FCLayers(
+            n_in=n_input,
+            n_out=n_output,
+            n_cat_list=n_cat_list,
+            n_layers=1,
+            use_activation=False,
+            use_batch_norm=use_batch_norm,
+            use_layer_norm=use_layer_norm,
+            bias=bias,
+            dropout_rate=0,
+            inject_covariates=inject_covariates,
+            **kwargs,
+        )
+
+        # dropout
+        self.px_dropout_decoder = FCLayers(
+            n_in=n_input,
+            n_out=n_output,
+            n_cat_list=n_cat_list,
+            n_layers=1,
+            use_activation=False,
+            use_batch_norm=use_batch_norm,
+            use_layer_norm=use_layer_norm,
+            bias=bias,
+            dropout_rate=0,
+            inject_covariates=inject_covariates,
+            **kwargs,
+        )
+
+    def forward(self, dispersion: str, z: torch.Tensor, library: torch.Tensor, *cat_list: int):
+        """Forward pass."""
+        # The decoder returns values for the parameters of the ZINB distribution
+        raw_px_scale = self.factor_regressor(z, *cat_list)
+        px_scale = torch.softmax(raw_px_scale, dim=-1)
+        px_dropout = self.px_dropout_decoder(z, *cat_list)
+        px_rate = torch.exp(library) * px_scale
+        px_r = None
+
+        return px_scale, px_r, px_rate, px_dropout
+
+
+class LinearDecoderSCVI_(nn.Module):
+    """Linear decoder for scVI."""
+
+    def __init__(
+        self,
+        n_input: int,
+        n_output: int,
+        n_cat_list: Iterable[int] = None,
+        use_batch_norm: bool = False,
+        use_layer_norm: bool = False,
+        bias: bool = False,
         **kwargs,
     ):
         super().__init__()
@@ -717,15 +773,10 @@ class DecoderTOTALVI(nn.Module):
         use_batch_norm: float = True,
         use_layer_norm: float = False,
         scale_activation: Literal["softmax", "softplus"] = "softmax",
-        activation_function_bg: Literal["exp", "softplus"] = "softplus",
     ):
         super().__init__()
         self.n_output_genes = n_output_genes
         self.n_output_proteins = n_output_proteins
-        if activation_function_bg == "exp":
-            self.activation_function_bg = ExpActivation()  # reproducibility remove for totalVI 2.0
-        elif activation_function_bg == "softplus":
-            self.activation_function_bg = nn.Softplus()
 
         linear_args = {
             "n_layers": 1,
@@ -878,9 +929,7 @@ class DecoderTOTALVI(nn.Module):
         py_back_cat_z = torch.cat([py_back, z], dim=-1)
 
         py_["back_alpha"] = self.py_back_mean_log_alpha(py_back_cat_z, *cat_list)
-        py_["back_beta"] = self.activation_function_bg(
-            self.py_back_mean_log_beta(py_back_cat_z, *cat_list)
-        )
+        py_["back_beta"] = torch.exp(self.py_back_mean_log_beta(py_back_cat_z, *cat_list))
         log_pro_back_mean = Normal(py_["back_alpha"], py_["back_beta"]).rsample()
         py_["rate_back"] = torch.exp(log_pro_back_mean)
 
