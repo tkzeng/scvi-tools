@@ -4,12 +4,32 @@ Starting from version 0.20.1, this format is based on [Keep a Changelog], and th
 to [Semantic Versioning]. Full commit history is available in the
 [commit logs](https://github.com/scverse/scvi-tools/commits/).
 
-## Version 1.2 (unreleased)
+## Version 1.2
 
-### 1.2.0 (unreleased)
+### 1.2.1 (2024-XX-XX)
 
 #### Added
 
+#### Fixed
+
+- Breaking Change: Fix `get_outlier_cell_sample_pairs` function in {class}`scvi.external.MRVI`
+    to correctly compute the maxmimum log-density across in-sample cells rather than the
+    aggregated posterior log-density {pr}`3007`.
+
+#### Changed
+
+#### Removed
+
+### 1.2.0 (2024-09-26)
+
+#### Added
+
+- Add support for Python 3.12 {pr}`2966`.
+- Add support for categorial covariates in scArches in `scvi.model.archesmixin` {pr}`2936`.
+- Add assertion error in cellAssign for checking duplicates in celltype markers {pr}`2951`.
+- Add `scvi.external.poissonvi.get_region_factors` {pr}`2940`.
+- {attr}`scvi.settings.dl_persistent_workers` allows using persistent workers in
+    {class}`scvi.dataloaders.AnnDataLoader` {pr}`2924`.
 - Add option for using external indexes in data splitting classes that are under `scvi.dataloaders`
     by passing `external_indexing=list[train_idx,valid_idx,test_idx]` as well as in all models
     available {pr}`2902`.
@@ -48,6 +68,8 @@ to [Semantic Versioning]. Full commit history is available in the
     data {pr}`2756`.
 - Add support for reference mapping with {class}`mudata.MuData` models to
     {class}`scvi.model.base.ArchesMixin` {pr}`2578`.
+- Add {class}`scvi.external.METHYLVI` for modeling methylation data from single-cell
+    bisulfite sequencing (scBS-seq) experiments {pr}`2834`.
 - Add argument `return_mean` to {meth}`scvi.model.base.VAEMixin.get_reconstruction_error`
     and {meth}`scvi.model.base.VAEMixin.get_elbo` to allow computation
     without averaging across cells {pr}`2362`.
@@ -95,11 +117,16 @@ to [Semantic Versioning]. Full commit history is available in the
 
 #### Fixed
 
+- Fix logging of accuracy for cases with 1 sample per class in scANVI {pr}`2938`.
 - Disable adversarial classifier if training with a single batch.
     Previously this raised a None error {pr}`2914`.
 - {meth}`~scvi.model.SCVI.get_normalized_expression` fixed for Poisson distribution and
     Negative Binomial with latent_library_size {pr}`2915`.
 - Fix {meth}`scvi.module.VAE.marginal_ll` when `n_mc_samples_per_pass=1` {pr}`2362`.
+- {meth}`scvi.module.VAE.marginal_ll` when `n_mc_samples_per_pass=1` {pr}`2362`.
+- Enable option to drop_last minibatch during training by `datasplitter_kwargs={"drop_last": True}`
+    {pr}`2926`.
+- Fix JAX to be deterministic on CUDA when seed is manually set {pr}`2923`.
 
 #### Removed
 
@@ -112,6 +139,13 @@ to [Semantic Versioning]. Full commit history is available in the
     {class}`scvi.train.Trainer` {pr}`2646`.
 
 ## Version 1.1
+
+### 1.1.6 (2024-08-19)
+
+#### Fixed
+
+- Breaking change: In `scvi.autotune._manager` we changed the parameter in RunConfig from
+    `local_dir` to `storage_path` see issue `2908` {pr}`2689`.
 
 ### 1.1.5 (2024-06-30)
 

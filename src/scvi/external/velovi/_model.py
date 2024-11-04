@@ -2,14 +2,12 @@ from __future__ import annotations
 
 import logging
 import warnings
-from collections.abc import Iterable, Sequence
-from typing import Literal
+from typing import TYPE_CHECKING
 
 import numpy as np
 import pandas as pd
 import torch
 import torch.nn.functional as F
-from anndata import AnnData
 from joblib import Parallel, delayed
 from scipy.stats import ttest_ind
 
@@ -23,7 +21,11 @@ from scvi.model.base import BaseModelClass, UnsupervisedTrainingMixin, VAEMixin
 from scvi.train import TrainingPlan, TrainRunner
 from scvi.utils._docstrings import devices_dsp, setup_anndata_dsp
 
-import wandb
+if TYPE_CHECKING:
+    from collections.abc import Iterable, Sequence
+    from typing import Literal
+
+    from anndata import AnnData
 
 logger = logging.getLogger(__name__)
 
@@ -73,7 +75,6 @@ class VELOVI(VAEMixin, UnsupervisedTrainingMixin, BaseModelClass):
 
         spliced = self.adata_manager.get_from_registry(VELOVI_REGISTRY_KEYS.X_KEY)
         unspliced = self.adata_manager.get_from_registry(VELOVI_REGISTRY_KEYS.U_KEY)
-        # mask = self.adata_manager.get_from_registry(VELOVI_REGISTRY_KEYS.M_KEY)
 
         sorted_unspliced = np.argsort(unspliced, axis=0)
         ind = int(adata.n_obs * 0.99)
@@ -115,13 +116,8 @@ class VELOVI(VAEMixin, UnsupervisedTrainingMixin, BaseModelClass):
             **model_kwargs,
         )
         self._model_summary_string = (
-            "VELOVI Model with the following params: \nn_hidden: {}, n_latent: {}, n_layers: {}, "
-            "dropout_rate: {}"
-        ).format(
-            n_hidden,
-            n_latent,
-            n_layers,
-            dropout_rate,
+            f"VELOVI Model with the following params: \nn_hidden: {n_hidden}, "
+            f"n_latent: {n_latent}, n_layers: {n_layers}, dropout_rate: {dropout_rate}"
         )
         self.init_params_ = self._get_init_params(locals())
 
@@ -176,17 +172,6 @@ class VELOVI(VAEMixin, UnsupervisedTrainingMixin, BaseModelClass):
         **trainer_kwargs
             Other keyword args for :class:`~scvi.train.Trainer`.
         """
-        # start a new wandb run to track this script
-        # wandb.init(
-        #     # set the wandb project where this run will be logged
-        #     project="velovi",
-        #
-        #     # track hyperparameters and run metadata
-        #     config={
-        #         "code": "original"
-        #     }
-        # )
-
         user_plan_kwargs = plan_kwargs.copy() if isinstance(plan_kwargs, dict) else {}
         plan_kwargs = {"lr": lr, "weight_decay": weight_decay, "optimizer": "AdamW"}
         plan_kwargs.update(user_plan_kwargs)
@@ -202,7 +187,6 @@ class VELOVI(VAEMixin, UnsupervisedTrainingMixin, BaseModelClass):
             batch_size=batch_size,
             external_indexing=external_indexing,
         )
-
         training_plan = TrainingPlan(self.module, **plan_kwargs)
 
         es = "early_stopping"
@@ -655,8 +639,6 @@ class VELOVI(VAEMixin, UnsupervisedTrainingMixin, BaseModelClass):
         return_mean: bool = True,
         return_numpy: bool | None = None,
         restrict_to_latent_dim: int | None = None,
-        w_adj=None,
-        basal=None
     ) -> np.ndarray | pd.DataFrame:
         r"""Returns the fitted spliced and unspliced abundance (s(t) and u(t)).
 
@@ -719,9 +701,7 @@ class VELOVI(VAEMixin, UnsupervisedTrainingMixin, BaseModelClass):
                 inference_outputs, generative_outputs = self.module.forward(
                     tensors=tensors,
                     compute_loss=False,
-                    generative_kwargs={"latent_dim": restrict_to_latent_dim,
-                                       "w_adj": w_adj,
-                                       "basal": basal},
+                    generative_kwargs={"latent_dim": restrict_to_latent_dim},
                 )
 
                 gamma = inference_outputs["gamma"]
@@ -927,12 +907,8 @@ class VELOVI(VAEMixin, UnsupervisedTrainingMixin, BaseModelClass):
             "gamma": gamma.cpu().numpy(),
             "alpha": alpha.cpu().numpy(),
             "alpha_1": alpha_1.cpu().numpy(),
-            "lambda_alpha": lambda_alpha.cpu().numpy()
+            "lambda_alpha": lambda_alpha.cpu().numpy(),
         }
-
-    @torch.inference_mode()
-    def get_w_adj(self):
-        return self.module._get_w_adj()
 
     @classmethod
     @setup_anndata_dsp.dedent
@@ -941,7 +917,6 @@ class VELOVI(VAEMixin, UnsupervisedTrainingMixin, BaseModelClass):
         adata: AnnData,
         spliced_layer: str,
         unspliced_layer: str,
-        mask_layer: str,
         **kwargs,
     ) -> AnnData | None:
         """%(summary)s.
@@ -962,7 +937,6 @@ class VELOVI(VAEMixin, UnsupervisedTrainingMixin, BaseModelClass):
         anndata_fields = [
             LayerField(VELOVI_REGISTRY_KEYS.X_KEY, spliced_layer, is_count_data=False),
             LayerField(VELOVI_REGISTRY_KEYS.U_KEY, unspliced_layer, is_count_data=False),
-            LayerField(VELOVI_REGISTRY_KEYS.M_KEY, mask_layer, is_count_data=False),
         ]
         adata_manager = AnnDataManager(fields=anndata_fields, setup_method_args=setup_method_args)
         adata_manager.register_fields(adata, **kwargs)

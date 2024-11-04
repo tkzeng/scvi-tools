@@ -1,8 +1,10 @@
 from __future__ import annotations
 
-from collections.abc import Iterable
+from typing import TYPE_CHECKING
 
+import torch
 import torch.nn.functional as F
+from torch import nn as nn
 from torch.distributions import Categorical, Dirichlet, MixtureSameFamily, Normal
 from torch.distributions import kl_divergence as kl
 
@@ -11,7 +13,11 @@ from scvi.module._constants import MODULE_KEYS
 from scvi.module.base import BaseModuleClass, LossOutput, auto_move_data
 from scvi.nn import Encoder, FCLayers
 
-from scvi.external.velovi.sdcd_modules import *
+if TYPE_CHECKING:
+    from collections.abc import Iterable
+    from typing import Literal
+
+    import numpy as np
 
 
 class DecoderVELOVI(nn.Module):
@@ -58,9 +64,6 @@ class DecoderVELOVI(nn.Module):
         linear_decoder: bool = False,
         **kwargs,
     ):
-        # print("n_input", n_input)
-        # print("n_output", n_output)
-
         super().__init__()
         self.n_ouput = n_output
         self.linear_decoder = linear_decoder
@@ -105,63 +108,7 @@ class DecoderVELOVI(nn.Module):
         self.linear_scaling_tau = nn.Parameter(torch.zeros(n_output))
         self.linear_scaling_tau_intercept = nn.Parameter(torch.zeros(n_output))
 
-        # initialize current adjacency matrix
-        # self.num_vars = n_output # number of genes
-        # self.adjacency = torch.ones((self.num_vars, self.num_vars)) - torch.eye(self.num_vars)
-        # self.gumbel_adjacency = GumbelAdjacency(self.num_vars)
-        #
-        # self.zero_weights_ratio = 0.
-        # self.numel_weights = 0
-        # self.num_layers = 0 # number of hidden layers?
-        # self.weights = nn.ParameterList()
-        # self.biases = nn.ParameterList()
-        #
-        # self.hid_dim = 8
-        #
-        # # Instantiate the parameters of each layer in the model of each variable
-        # for i in range(self.num_layers + 1):
-        #     in_dim = self.hid_dim
-        #     out_dim = self.hid_dim
-        #
-        #     # first layer
-        #     if i == 0:
-        #         in_dim = self.num_vars
-        #
-        #     # last layer
-        #     if i == self.num_layers:
-        #         out_dim = 1 #self.num_params
-        #
-        #     # for perfect interv, generate only one MLP per conditional
-        #     self.weights.append(nn.Parameter(torch.zeros(self.num_vars, out_dim, in_dim)))
-        #     self.biases.append(nn.Parameter(torch.zeros(self.num_vars, out_dim)))
-        #     self.numel_weights += self.num_vars * out_dim * in_dim
-
-        self.use_gumbel = False
-        self.model_variance_flavor = "unit"
-        self.num_layers = 1
-        self.dim_hidden = 10
-
-        # sample_batch = next(iter(ps_dataloader))
-        # assert len(sample_batch) == 3, "Dataset should contain (X, masks, regimes)"
-
-        self.d = n_output
-        self._ps_model = AutoEncoderLayers(
-            self.d,
-            [self.dim_hidden] * self.num_layers,
-            nn.Sigmoid(),
-            model_variance_flavor=self.model_variance_flavor,
-            shared_layers=False,
-            adjacency_p=2.0,
-            dag_penalty_flavor="none",
-            use_gumbel=self.use_gumbel,
-        )
-
-    def forward(self,
-                z: torch.Tensor,
-                x: torch.Tensor,
-                latent_dim: int = None,
-                w_adj=None,
-                basal=None):
+    def forward(self, z: torch.Tensor, latent_dim: int = None):
         """The forward computation for a single sample.
 
          #. Decodes the data from the latent space using the decoder network
@@ -204,14 +151,7 @@ class DecoderVELOVI(nn.Module):
             torch.reshape(self.px_pi_decoder(pi_first), (z.shape[0], self.n_ouput, 4))
         )
 
-        ##### graph params #####
-        if w_adj is not None and basal is not None:
-            alpha = w_adj @ x.T + basal
-            alpha = alpha.T
-        else:
-            alpha, _ = self._ps_model(x)
-
-        return px_pi, px_rho, px_tau, alpha
+        return px_pi, px_rho, px_tau
 
 
 # VAE model
@@ -385,7 +325,6 @@ class VELOVAE(BaseModuleClass):
         return input_dict
 
     def _get_generative_input(self, tensors, inference_outputs):
-        x = tensors[VELOVI_REGISTRY_KEYS.X_KEY]
         z = inference_outputs["z"]
         gamma = inference_outputs["gamma"]
         beta = inference_outputs["beta"]
@@ -395,7 +334,6 @@ class VELOVAE(BaseModuleClass):
 
         input_dict = {
             "z": z,
-            "x": x,
             "gamma": gamma,
             "beta": beta,
             "alpha": alpha,
@@ -463,27 +401,11 @@ class VELOVAE(BaseModuleClass):
 
         return gamma, beta, alpha, alpha_1, lambda_alpha
 
-    def _get_w_adj(self):
-        # non thresholded adjacency matrix
-        return self.decoder._ps_model.get_adjacency_matrix().cpu().detach().numpy()
-
     @auto_move_data
-    def generative(self, z, x, gamma, beta, alpha, alpha_1, lambda_alpha,
-                   latent_dim=None, w_adj=None, basal=None):
+    def generative(self, z, gamma, beta, alpha, alpha_1, lambda_alpha, latent_dim=None):
         """Runs the generative model."""
-        # lambda_alpha and alpha_1 are only used with time-dependent transcription rates
-
-        alpha_orig = alpha
-        decoder_input_1 = z
-        decoder_input_2 = x
-        # override alpha here
-        px_pi_alpha, px_rho, px_tau, alpha = self.decoder(decoder_input_1,
-                                                          decoder_input_2,
-                                                          latent_dim=latent_dim,
-                                                          w_adj=w_adj,
-                                                          basal=basal)
-        # alpha = alpha_orig
-
+        decoder_input = z
+        px_pi_alpha, px_rho, px_tau = self.decoder(decoder_input, latent_dim=latent_dim)
         px_pi = Dirichlet(px_pi_alpha).rsample()
 
         scale_unconstr = self.scale_unconstr
@@ -510,47 +432,7 @@ class VELOVAE(BaseModuleClass):
             "mixture_dist_u": mixture_dist_u,
             "mixture_dist_s": mixture_dist_s,
             "end_penalty": end_penalty,
-            "alpha": alpha
         }
-
-    def get_adjacency_matrix(self):
-        return self.layers[0].get_adjacency_matrix()
-
-    def update_mask(self, mask):
-        mask = (mask.astype(bool) & (1 - np.eye(self.in_dim)).astype(bool)).astype(int)
-        self.layers[0].mask = torch.tensor(mask).to(self.device)
-
-    @torch.no_grad()
-    def reset_parameters(self):
-        for layer in self.layers:
-            layer.reset_parameters()
-
-    def reconstruction_loss(self, x, mask_interventions_oh=None):
-        x_mean, x_var = self(x)  # calls forward
-
-        if mask_interventions_oh is None:
-            mask_interventions_oh = torch.ones_like(x_mean)
-
-        nll = -(
-            mask_interventions_oh * dist.Normal(x_mean, x_var ** (0.5)).log_prob(x)
-        ).sum()
-        # we normalize by the number of samples (but ideally we shouldn't, as it mess up
-        # with the L1 and L2 regularization scales)
-        nll /= x.shape[0]
-        return nll
-
-    def l1_reg_dispatcher(self):
-        # maybe change to abs of the collapsed weights (sum over hidden dim)
-        return torch.sum(torch.abs(self.decoder._ps_model.layers[0].weight))
-
-    def l2_reg_all_weights(self):
-        return sum(
-            [
-                torch.sum(p ** 2)
-                for p_name, p in self.decoder._ps_model.named_parameters()
-                if p.requires_grad and (p_name != "layers.0.gumbel_adjacency.log_alpha")
-            ]
-        )
 
     def loss(
         self,
@@ -562,7 +444,6 @@ class VELOVAE(BaseModuleClass):
     ):
         spliced = tensors[VELOVI_REGISTRY_KEYS.X_KEY]
         unspliced = tensors[VELOVI_REGISTRY_KEYS.U_KEY]
-        interventions_mask = tensors[VELOVI_REGISTRY_KEYS.M_KEY]
 
         qz_m = inference_outputs[MODULE_KEYS.QZM_KEY]
         qz_v = inference_outputs[MODULE_KEYS.QZV_KEY]
@@ -576,17 +457,15 @@ class VELOVAE(BaseModuleClass):
 
         kl_divergence_z = kl(Normal(qz_m, torch.sqrt(qz_v)), Normal(0, 1)).sum(dim=1)
 
-        reconst_loss_s = -mixture_dist_s.log_prob(spliced) * interventions_mask
-        reconst_loss_u = -mixture_dist_u.log_prob(unspliced) * interventions_mask
+        reconst_loss_s = -mixture_dist_s.log_prob(spliced)
+        reconst_loss_u = -mixture_dist_u.log_prob(unspliced)
 
         reconst_loss = reconst_loss_u.sum(dim=-1) + reconst_loss_s.sum(dim=-1)
 
         kl_pi = kl(
             Dirichlet(px_pi_alpha),
             Dirichlet(self.dirichlet_concentration * torch.ones_like(px_pi)),
-        )
-        kl_pi = kl_pi * interventions_mask
-        kl_pi = kl_pi.sum(dim=-1)
+        ).sum(dim=-1)
 
         # local loss
         kl_local = kl_divergence_z + kl_pi
@@ -596,13 +475,7 @@ class VELOVAE(BaseModuleClass):
 
         loss = local_loss + self.penalty_scale * (1 - kl_weight) * end_penalty
 
-        l1_reg = 10.0 * self.l1_reg_dispatcher()
-        l2_reg = 0.0 * self.l2_reg_all_weights()
-        loss = loss + l1_reg + l2_reg
-
         loss_recoder = LossOutput(loss=loss, reconstruction_loss=reconst_loss, kl_local=kl_local)
-
-        # wandb.log({"loss": loss})
 
         return loss_recoder
 
@@ -654,7 +527,7 @@ class VELOVAE(BaseModuleClass):
         )
         mean_u_rep_steady = torch.zeros_like(mean_u_ind)
         mean_s_rep_steady = torch.zeros_like(mean_u_ind)
-        scale_s = scale[self.n_input:, :].expand(n_cells, self.n_input, 4).sqrt()
+        scale_s = scale[self.n_input :, :].expand(n_cells, self.n_input, 4).sqrt()
 
         end_penalty = ((u_0 - self.switch_unspliced).pow(2)).sum() + (
             (s_0 - self.switch_spliced).pow(2)
@@ -724,17 +597,10 @@ class VELOVAE(BaseModuleClass):
                 * (torch.exp(-beta * t) - torch.exp(-gamma * t))
             )
         else:
-            # print("alpha", alpha.shape) # len(alpha), alpha[0].shape)
-            # print("beta", beta.shape)
-            # print("t", t.shape)
-
             unspliced = (alpha / beta) * (1 - torch.exp(-beta * t))
             spliced = (alpha / gamma) * (1 - torch.exp(-gamma * t)) + (
                 alpha / ((gamma - beta) + eps)
             ) * (torch.exp(-gamma * t) - torch.exp(-beta * t))
-
-        # print("uns", unspliced.shape)
-        # print("spl", spliced.shape)
 
         return unspliced, spliced
 
@@ -745,31 +611,11 @@ class VELOVAE(BaseModuleClass):
         )
         return unspliced, spliced
 
-    # def sample(
-    #     self,
-    # ) -> np.ndarray:
-    #     """Not implemented."""
-    #     raise NotImplementedError
-
-    @torch.inference_mode()
-    def sample(self, z, x, n_samples=1):
-        """Sample from the generative model."""
-        inference_kwargs = {"n_samples": n_samples}
-
-        with torch.inference_mode():
-            inference_outputs, generative_outputs = self.forward(
-                z, x,
-                inference_kwargs=inference_kwargs,
-                compute_loss=False,
-            )
-
-        mixture_dist_s = generative_outputs["mixture_dist_s"]
-        mixture_dist_u = generative_outputs["mixture_dist_u"]
-
-        spliced_sample = mixture_dist_s.sample().cpu()
-        unspliced_sample = mixture_dist_u.sample().cpu()
-
-        return spliced_sample, unspliced_sample
+    def sample(
+        self,
+    ) -> np.ndarray:
+        """Not implemented."""
+        raise NotImplementedError
 
     @torch.no_grad()
     def get_loadings(self) -> np.ndarray:
