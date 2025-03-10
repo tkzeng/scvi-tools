@@ -18,6 +18,7 @@ from scvi.module.base import (
 )
 
 from scvi.nn import LinearDecoderSCVI
+
 if TYPE_CHECKING:
     from collections.abc import Callable
     from typing import Literal
@@ -171,6 +172,7 @@ class VAE(EmbeddingModuleMixin, BaseMinifiedModeModuleClass):
         extra_encoder_kwargs: dict | None = None,
         extra_decoder_kwargs: dict | None = None,
         batch_embedding_kwargs: dict | None = None,
+        use_linear_decoder: bool = False,
     ):
         from scvi.nn import DecoderSCVI, Encoder
 
@@ -186,6 +188,7 @@ class VAE(EmbeddingModuleMixin, BaseMinifiedModeModuleClass):
         self.encode_covariates = encode_covariates
         self.use_size_factor_key = use_size_factor_key
         self.use_observed_lib_size = use_size_factor_key or use_observed_lib_size
+        self.use_linear_decoder = use_linear_decoder
 
         if not self.use_observed_lib_size:
             if library_log_means is None or library_log_vars is None:
@@ -194,8 +197,12 @@ class VAE(EmbeddingModuleMixin, BaseMinifiedModeModuleClass):
                     "must provide library_log_means and library_log_vars."
                 )
 
-            self.register_buffer("library_log_means", torch.from_numpy(library_log_means).float())
-            self.register_buffer("library_log_vars", torch.from_numpy(library_log_vars).float())
+            self.register_buffer(
+                "library_log_means", torch.from_numpy(library_log_means).float()
+            )
+            self.register_buffer(
+                "library_log_vars", torch.from_numpy(library_log_vars).float()
+            )
 
         if self.dispersion == "gene":
             self.px_r = torch.nn.Parameter(torch.randn(n_input))
@@ -212,10 +219,14 @@ class VAE(EmbeddingModuleMixin, BaseMinifiedModeModuleClass):
 
         self.batch_representation = batch_representation
         if self.batch_representation == "embedding":
-            self.init_embedding(REGISTRY_KEYS.BATCH_KEY, n_batch, **(batch_embedding_kwargs or {}))
+            self.init_embedding(
+                REGISTRY_KEYS.BATCH_KEY, n_batch, **(batch_embedding_kwargs or {})
+            )
             batch_dim = self.get_embedding(REGISTRY_KEYS.BATCH_KEY).embedding_dim
         elif self.batch_representation != "one-hot":
-            raise ValueError("`batch_representation` must be one of 'one-hot', 'embedding'.")
+            raise ValueError(
+                "`batch_representation` must be one of 'one-hot', 'embedding'."
+            )
 
         use_batch_norm_encoder = use_batch_norm == "encoder" or use_batch_norm == "both"
         use_batch_norm_decoder = use_batch_norm == "decoder" or use_batch_norm == "both"
@@ -227,7 +238,9 @@ class VAE(EmbeddingModuleMixin, BaseMinifiedModeModuleClass):
             n_input_encoder += batch_dim * encode_covariates
             cat_list = list([] if n_cats_per_cov is None else n_cats_per_cov)
         else:
-            cat_list = [n_batch] + list([] if n_cats_per_cov is None else n_cats_per_cov)
+            cat_list = [n_batch] + list(
+                [] if n_cats_per_cov is None else n_cats_per_cov
+            )
 
         encoder_cat_list = cat_list if encode_covariates else None
         _extra_encoder_kwargs = extra_encoder_kwargs or {}
@@ -266,34 +279,34 @@ class VAE(EmbeddingModuleMixin, BaseMinifiedModeModuleClass):
             n_input_decoder += batch_dim
 
         _extra_decoder_kwargs = extra_decoder_kwargs or {}
-        #self.decoder = DecoderSCVI(
-        #    n_input_decoder,
-        #    n_input,
-        #    n_cat_list=cat_list,
-        #    n_layers=n_layers,
-        #    n_hidden=n_hidden,
-        #    inject_covariates=deeply_inject_covariates,
-        #    use_batch_norm=use_batch_norm_decoder,
-        #    use_layer_norm=use_layer_norm_decoder,
-        #    scale_activation="softplus" if use_size_factor_key else "softmax",
-        #    **_extra_decoder_kwargs,
-        #)
-        self.use_batch_norm=False
-        bias=False
-        self.decoder = LinearDecoderSCVI(
-            n_input_decoder,
-            n_input,
-            n_cat_list=cat_list,
-            use_batch_norm=use_batch_norm,
-            use_layer_norm=False,
-            bias=bias,
-        )
+        if use_linear_decoder:
+            self.decoder = LinearDecoderSCVI(
+                n_input_decoder,
+                n_input,
+                n_cat_list=cat_list,
+                use_batch_norm=use_batch_norm_decoder,
+                use_layer_norm=False,
+                **_extra_decoder_kwargs,
+            )
+        else:
+            self.decoder = DecoderSCVI(
+                n_input_decoder,
+                n_input,
+                n_cat_list=cat_list,
+                n_layers=n_layers,
+                n_hidden=n_hidden,
+                inject_covariates=deeply_inject_covariates,
+                use_batch_norm=use_batch_norm_decoder,
+                use_layer_norm=use_layer_norm_decoder,
+                scale_activation="softplus" if use_size_factor_key else "softmax",
+                **_extra_decoder_kwargs,
+            )
 
     @torch.inference_mode()
     def get_loadings(self) -> np.ndarray:
         """Extract per-gene weights in the linear decoder."""
         # This is BW, where B is diag(b) batch norm, W is weight matrix
-        #print(self.decoder.px_decoder)
+        # print(self.decoder.px_decoder)
         if self.use_batch_norm is True:
             w = self.decoder.factor_regressor.fc_layers[0][0].weight
             bn = self.decoder.factor_regressor.fc_layers[0][1]
@@ -321,17 +334,23 @@ class VAE(EmbeddingModuleMixin, BaseMinifiedModeModuleClass):
             return {
                 MODULE_KEYS.X_KEY: tensors[REGISTRY_KEYS.X_KEY],
                 MODULE_KEYS.BATCH_INDEX_KEY: tensors[REGISTRY_KEYS.BATCH_KEY],
-                MODULE_KEYS.CONT_COVS_KEY: tensors.get(REGISTRY_KEYS.CONT_COVS_KEY, None),
+                MODULE_KEYS.CONT_COVS_KEY: tensors.get(
+                    REGISTRY_KEYS.CONT_COVS_KEY, None
+                ),
                 MODULE_KEYS.CAT_COVS_KEY: tensors.get(REGISTRY_KEYS.CAT_COVS_KEY, None),
             }
         elif self.minified_data_type == ADATA_MINIFY_TYPE.LATENT_POSTERIOR:
             return {
                 MODULE_KEYS.QZM_KEY: tensors[REGISTRY_KEYS.LATENT_QZM_KEY],
                 MODULE_KEYS.QZV_KEY: tensors[REGISTRY_KEYS.LATENT_QZV_KEY],
-                REGISTRY_KEYS.OBSERVED_LIB_SIZE: tensors[REGISTRY_KEYS.OBSERVED_LIB_SIZE],
+                REGISTRY_KEYS.OBSERVED_LIB_SIZE: tensors[
+                    REGISTRY_KEYS.OBSERVED_LIB_SIZE
+                ],
             }
         else:
-            raise NotImplementedError(f"Unknown minified-data type: {self.minified_data_type}")
+            raise NotImplementedError(
+                f"Unknown minified-data type: {self.minified_data_type}"
+            )
 
     def _get_generative_input(
         self,
@@ -449,7 +468,9 @@ class VAE(EmbeddingModuleMixin, BaseMinifiedModeModuleClass):
         from scvi.data._constants import ADATA_MINIFY_TYPE
 
         if self.minified_data_type != ADATA_MINIFY_TYPE.LATENT_POSTERIOR:
-            raise NotImplementedError(f"Unknown minified-data type: {self.minified_data_type}")
+            raise NotImplementedError(
+                f"Unknown minified-data type: {self.minified_data_type}"
+            )
 
         dist = Normal(qzm, qzv.sqrt())
         # use dist.sample() rather than rsample because we aren't optimizing the z here
@@ -457,7 +478,9 @@ class VAE(EmbeddingModuleMixin, BaseMinifiedModeModuleClass):
         z = self.z_encoder.z_transformation(untran_z)
         library = torch.log(observed_lib_size)
         if n_samples > 1:
-            library = library.unsqueeze(0).expand((n_samples, library.size(0), library.size(1)))
+            library = library.unsqueeze(0).expand(
+                (n_samples, library.size(0), library.size(1))
+            )
 
         return {
             MODULE_KEYS.Z_KEY: z,
@@ -483,7 +506,11 @@ class VAE(EmbeddingModuleMixin, BaseMinifiedModeModuleClass):
         from torch.distributions import Normal
         from torch.nn.functional import linear
 
-        from scvi.distributions import NegativeBinomial, Poisson, ZeroInflatedNegativeBinomial
+        from scvi.distributions import (
+            NegativeBinomial,
+            Poisson,
+            ZeroInflatedNegativeBinomial,
+        )
 
         # TODO: refactor forward function to not rely on y
         # Likelihood distribution
@@ -532,7 +559,9 @@ class VAE(EmbeddingModuleMixin, BaseMinifiedModeModuleClass):
                 one_hot(y.squeeze(-1), self.n_labels).float(), self.px_r
             )  # px_r gets transposed - last dimension is nb genes
         elif self.dispersion == "gene-batch":
-            px_r = linear(one_hot(batch_index.squeeze(-1), self.n_batch).float(), self.px_r)
+            px_r = linear(
+                one_hot(batch_index.squeeze(-1), self.n_batch).float(), self.px_r
+            )
         elif self.dispersion == "gene":
             px_r = self.px_r
 
@@ -581,11 +610,13 @@ class VAE(EmbeddingModuleMixin, BaseMinifiedModeModuleClass):
 
         x = tensors[REGISTRY_KEYS.X_KEY]
         kl_divergence_z = kl_divergence(
-            inference_outputs[MODULE_KEYS.QZ_KEY], generative_outputs[MODULE_KEYS.PZ_KEY]
+            inference_outputs[MODULE_KEYS.QZ_KEY],
+            generative_outputs[MODULE_KEYS.PZ_KEY],
         ).sum(dim=-1)
         if not self.use_observed_lib_size:
             kl_divergence_l = kl_divergence(
-                inference_outputs[MODULE_KEYS.QL_KEY], generative_outputs[MODULE_KEYS.PL_KEY]
+                inference_outputs[MODULE_KEYS.QL_KEY],
+                generative_outputs[MODULE_KEYS.PL_KEY],
             ).sum(dim=1)
         else:
             kl_divergence_l = torch.tensor(0.0, device=x.device)
@@ -710,7 +741,9 @@ class VAE(EmbeddingModuleMixin, BaseMinifiedModeModuleClass):
 
             # Log-probabilities
             p_z = (
-                Normal(torch.zeros_like(qz.loc), torch.ones_like(qz.scale)).log_prob(z).sum(dim=-1)
+                Normal(torch.zeros_like(qz.loc), torch.ones_like(qz.scale))
+                .log_prob(z)
+                .sum(dim=-1)
             )
             p_x_zl = -reconst_loss
             q_z_x = qz.log_prob(z).sum(dim=-1)
